@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>杯子與球記憶遊戲</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f8f8f8;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            height: 100vh;
+            overflow: hidden;
+            min-height: 400px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background-color: #fff;
+        }
+        #prompt {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.5);
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 18px;
+            text-align: center;
+            color: #000;
+            z-index: 10;
+            line-height: 1.5;
+        }
+        #level {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(255, 255, 255, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 16px;
+            color: #000;
+            z-index: 10;
+        }
+        .confetti {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: red;
+            opacity: 0.8;
+            animation: fall linear infinite;
+            z-index: 20;
+        }
+        @keyframes fall {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100vh); }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="prompt"></div>
+        <div id="level">第 1 關</div>
+    </div>
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const prompt = document.getElementById('prompt');
+        const levelDisplay = document.getElementById('level');
+        const container = document.getElementById('game-container');
+
+        // 檢查 DOM 元素
+        if (!canvas || !ctx || !prompt || !levelDisplay || !container) {
+            console.error('初始化失敗：未找到必要的 DOM 元素');
+            throw new Error('初始化失敗');
+        }
+
+        // 載入圖像
+        const cupImage = new Image();
+        const coinImage = new Image();
+        let cupImageLoaded = false;
+        let coinImageLoaded = false;
+
+        cupImage.src = 'blue_cup_no_bg.png';
+        coinImage.src = 'coin_no_bg.png';
+
+        cupImage.onload = () => {
+            cupImageLoaded = true;
+            console.log('杯子圖像載入成功');
+        };
+        coinImage.onload = () => {
+            coinImageLoaded = true;
+            console.log('硬幣圖像載入成功');
+        };
+        cupImage.onerror = () => {
+            console.warn('杯子圖像載入失敗，使用備用形狀');
+            cupImageLoaded = false;
+        };
+        coinImage.onerror = () => {
+            console.warn('硬幣圖像載入失敗，使用備用形狀');
+            coinImageLoaded = false;
+        };
+
+        // 調整畫布大小
+        function resizeCanvas() {
+            try {
+                canvas.width = container.clientWidth || 400;
+                canvas.height = container.clientHeight || 800;
+                if (canvas.width === 0 || canvas.height === 0) {
+                    console.warn('畫布尺寸無效，設置預設值');
+                    canvas.width = 400;
+                    canvas.height = 800;
+                }
+                if (gameState === 'start') {
+                    initCups();
+                }
+            } catch (e) {
+                console.error('畫布調整失敗:', e);
+            }
+        }
+        resizeCanvas();
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            initCups();
+        });
+
+        // 遊戲變數
+        let level = 1;
+        let consecutiveWins = 0;
+        let ballPosition = 0;
+        let cups = [{x: 0, y: 0}, {x: 0, y: 0}, {x: 0, y: 0}];
+        let ballX = 0, ballY = 0;
+        let gameState = 'start';
+        let shuffleCount = 0;
+        let currentShuffles = 0;
+        let shuffleSpeed = 1;
+        let lastClickTime = 0;
+        let visible = true;
+
+        const cupWidth = 100;
+        const cupHeight = 150;
+        const coinSize = 80;
+        const minDistance = Math.max(cupWidth, coinSize) * 1.5;
+
+        // 計算兩個位置之間的距離
+        function distance(pos1, pos2) {
+            try {
+                return Math.sqrt(Math.pow(pos1.x - pos2.x, 2) + Math.pow(pos1.y - pos2.y, 2));
+            } catch (e) {
+                console.error('距離計算失敗:', e);
+                return Infinity;
+            }
+        }
+
+        // 隨機位置
+        function randomPosition() {
+            try {
+                return {
+                    x: Math.random() * (canvas.width - cupWidth) + cupWidth / 2,
+                    y: Math.random() * (canvas.height - cupHeight) + cupHeight / 2
+                };
+            } catch (e) {
+                console.error('隨機位置生成失敗:', e);
+                return { x: cupWidth / 2, y: cupHeight / 2 };
+            }
+        }
+
+        // 初始化杯子和硬幣位置
+        function initCups() {
+            try {
+                cups = [];
+                ballX = canvas.width / 2;
+                ballY = canvas.height / 2;
+                const ballPos = { x: ballX, y: ballY };
+
+                let attempts = 0;
+                const maxAttempts = 50;
+                while (cups.length < 3 && attempts < maxAttempts) {
+                    let newPos = randomPosition();
+                    let overlaps = false;
+                    if (distance(newPos, ballPos) < minDistance) {
+                        overlaps = true;
+                    }
+                    for (let cup of cups) {
+                        if (distance(cup, newPos) < minDistance) {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if (!overlaps) {
+                        cups.push(newPos);
+                    }
+                    attempts++;
+                }
+                if (cups.length < 3) {
+                    console.warn('杯子初始化失敗，設置預設位置');
+                    cups = [
+                        { x: canvas.width / 4, y: canvas.height / 4 },
+                        { x: canvas.width * 3 / 4, y: canvas.height / 4 },
+                        { x: canvas.width / 2, y: canvas.height * 3 / 4 }
+                    ];
+                }
+                ballPosition = Math.floor(Math.random() * 3);
+            } catch (e) {
+                console.error('初始化杯子失敗:', e);
+            }
+        }
+
+        // 繪製杯子
+        function drawCup(x, y) {
+            try {
+                if (isNaN(x) || isNaN(y)) {
+                    console.warn('杯子位置無效:', {x, y});
+                    return;
+                }
+                if (cupImageLoaded) {
+                    ctx.drawImage(cupImage, x - cupWidth / 2, y - cupHeight / 2, cupWidth, cupHeight);
+                } else {
+                    ctx.fillStyle = 'blue';
+                    ctx.fillRect(x - cupWidth / 2, y - cupHeight / 2, cupWidth, cupHeight);
+                }
+            } catch (e) {
+                console.error('繪製杯子失敗:', e);
+            }
+        }
+
+        // 繪製硬幣
+        function drawCoin(x, y) {
+            try {
+                if (!visible) return;
+                if (isNaN(x) || isNaN(y) || x < 0 || x > canvas.width || y < 0 || y > canvas.height) {
+                    console.warn('硬幣位置無效，校正中:', {x, y});
+                    x = gameState === 'start' ? canvas.width / 2 : cups[ballPosition].x || canvas.width / 2;
+                    y = gameState === 'start' ? canvas.height / 2 : cups[ballPosition].y || canvas.height / 2;
+                    ballX = x;
+                    ballY = y;
+                }
+                if (coinImageLoaded) {
+                    ctx.drawImage(coinImage, x - coinSize / 2, y - coinSize / 2, coinSize, coinSize);
+                } else {
+                    ctx.fillStyle = 'yellow';
+                    ctx.beginPath();
+                    ctx.arc(x, y, coinSize / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            } catch (e) {
+                console.error('繪製硬幣失敗:', e);
+            }
+        }
+
+        // 顯示提示（支援多行文字）
+        function showPrompt(text, duration, callback) {
+            try {
+                prompt.innerHTML = text.replace('\n', '<br>');
+                setTimeout(() => {
+                    prompt.innerHTML = '';
+                    if (callback) callback();
+                }, duration * 1000);
+            } catch (e) {
+                console.error('顯示提示失敗:', e);
+            }
+        }
+
+        // 更新關卡顯示
+        function updateLevel() {
+            try {
+                levelDisplay.textContent = `第 ${level} 關`;
+            } catch (e) {
+                console.error('更新關卡顯示失敗:', e);
+            }
+        }
+
+        // 開始遊戲
+        function startGame() {
+            try {
+                initCups();
+                gameState = 'start';
+                ballX = canvas.width / 2;
+                ballY = canvas.height / 2;
+                visible = true;
+                showPrompt('留心睍清楚2蚊銀去咗邊！', 4, () => {
+                    gameState = 'moving_ball';
+                    moveBallToCup();
+                });
+                updateLevel();
+            } catch (e) {
+                console.error('遊戲啟動失敗:', e);
+            }
+        }
+
+        // 移動硬幣到杯子中心
+        function moveBallToCup() {
+            try {
+                if (ballPosition < 0 || ballPosition >= cups.length) {
+                    console.error('無效的 ballPosition:', ballPosition);
+                    ballPosition = 0;
+                }
+                const targetX = cups[ballPosition].x;
+                const targetY = cups[ballPosition].y;
+                if (isNaN(targetX) || isNaN(targetY)) {
+                    console.error('杯子位置無效:', {targetX, targetY});
+                    initCups();
+                    return;
+                }
+                const frames = 60;
+                const dx = (targetX - ballX) / frames;
+                const dy = (targetY - ballY) / frames;
+                let frame = 0;
+                function animate() {
+                    if (gameState !== 'moving_ball') return;
+                    ballX += dx;
+                    ballY += dy;
+                    visible = true;
+                    frame++;
+                    if (frame >= frames) {
+                        ballX = cups[ballPosition].x;
+                        ballY = cups[ballPosition].y;
+                        gameState = 'shuffling';
+                        startShuffle();
+                        return;
+                    }
+                    requestAnimationFrame(animate);
+                }
+                animate();
+            } catch (e) {
+                console.error('硬幣移動失敗:', e);
+            }
+        }
+
+        // 開始洗牌
+        function startShuffle() {
+            try {
+                currentShuffles = 0;
+                shuffleCount = level + 2;
+                shuffleSpeed = 1 + (level - 1) * 0.5;
+                shuffleCups();
+            } catch (e) {
+                console.error('開始洗牌失敗:', e);
+            }
+        }
+
+        // 洗牌杯子
+        function shuffleCups() {
+            try {
+                if (currentShuffles >= shuffleCount) {
+                    gameState = 'guessing';
+                    ballX = cups[ballPosition].x;
+                    ballY = cups[ballPosition].y;
+                    visible = true;
+                    showPrompt('選擇有2蚊硬幣的杯', 0);
+                    return;
+                }
+                const i = Math.floor(Math.random() * 3);
+                let j = Math.floor(Math.random() * 3);
+                while (j === i) j = Math.floor(Math.random() * 3);
+
+                let tempCups = [...cups];
+                tempCups[i] = randomPosition();
+                tempCups[j] = randomPosition();
+                let attempts = 0;
+                const maxAttempts = 50;
+
+                while (attempts < maxAttempts) {
+                    let overlaps = false;
+                    for (let k = 0; k < tempCups.length; k++) {
+                        if (k !== i && k !== j && distance(tempCups[i], tempCups[k]) < minDistance) {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    for (let k = 0; k < tempCups.length; k++) {
+                        if (k !== i && k !== j && distance(tempCups[j], tempCups[k]) < minDistance) {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if (distance(tempCups[i], tempCups[j]) < minDistance) {
+                        overlaps = true;
+                    }
+                    if (!overlaps) break;
+                    tempCups[i] = randomPosition();
+                    tempCups[j] = randomPosition();
+                    attempts++;
+                }
+
+                if (attempts >= maxAttempts) {
+                    currentShuffles++;
+                    shuffleCups();
+                    return;
+                }
+
+                const targetX1 = tempCups[i].x;
+                const targetY1 = tempCups[i].y;
+                const targetX2 = tempCups[j].x;
+                const targetY2 = tempCups[j].y;
+                const frames = Math.ceil(60 / shuffleSpeed);
+                const dx1 = (targetX1 - cups[i].x) / frames;
+                const dy1 = (targetY1 - cups[i].y) / frames;
+                const dx2 = (targetX2 - cups[j].x) / frames;
+                const dy2 = (targetY2 - cups[j].y) / frames;
+                let frame = 0;
+                function animateShuffle() {
+                    if (gameState !== 'shuffling') return;
+                    cups[i].x += dx1;
+                    cups[i].y += dy1;
+                    cups[j].x += dx2;
+                    cups[j].y += dy2;
+                    ballX = cups[ballPosition].x;
+                    ballY = cups[ballPosition].y;
+                    visible = true;
+                    frame++;
+                    if (frame >= frames) {
+                        cups[i].x = targetX1;
+                        cups[i].y = targetY1;
+                        cups[j].x = targetX2;
+                        cups[j].y = targetY2;
+                        ballX = cups[ballPosition].x;
+                        ballY = cups[ballPosition].y;
+                        currentShuffles++;
+                        shuffleCups();
+                        return;
+                    }
+                    requestAnimationFrame(animateShuffle);
+                }
+                animateShuffle();
+            } catch (e) {
+                console.error('洗牌失敗:', e);
+            }
+        }
+
+        // 硬幣閃爍
+        function flashCoin(duration) {
+            try {
+                visible = true;
+                let time = 0;
+                function flash() {
+                    visible = !visible;
+                    time += 0.5;
+                    if (time >= duration) {
+                        visible = true;
+                        nextRound();
+                        return;
+                    }
+                    setTimeout(flash, 500);
+                }
+                flash();
+            } catch (e) {
+                console.error('硬幣閃爍失敗:', e);
+            }
+        }
+
+        // 處理點擊和觸控
+        function handleInput(e) {
+            if (gameState !== 'guessing') return;
+            const currentTime = Date.now();
+            if (currentTime - lastClickTime < 500) return;
+            lastClickTime = currentTime;
+            try {
+                const rect = canvas.getBoundingClientRect();
+                let x, y;
+                if (e.type === 'touchstart') {
+                    e.preventDefault();
+                    x = e.touches[0].clientX - rect.left;
+                    y = e.touches[0].clientY - rect.top;
+                } else {
+                    x = e.clientX - rect.left;
+                    y = e.clientY - rect.top;
+                }
+                for (let i = 0; i < 3; i++) {
+                    if (x > cups[i].x - cupWidth / 2 && x < cups[i].x + cupWidth / 2 &&
+                        y > cups[i].y - cupHeight / 2 && y < cups[i].y + cupHeight / 2) {
+                        checkGuess(i);
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.error('輸入處理失敗:', e);
+            }
+        }
+        canvas.addEventListener('click', handleInput);
+        canvas.addEventListener('touchstart', handleInput);
+
+        // 檢查猜測
+        function checkGuess(selected) {
+            try {
+                gameState = 'feedback';
+                ballX = cups[ballPosition].x;
+                ballY = cups[ballPosition].y;
+                if (selected === ballPosition) {
+                    visible = true;
+                    showPrompt('你真係好叻呀！\n下一題！', 4, nextRound);
+                    consecutiveWins++;
+                    if (consecutiveWins >= 2) {
+                        level++;
+                        consecutiveWins = 0;
+                        if (level > 3) {
+                            completeGame();
+                            return;
+                        }
+                    }
+                } else {
+                    showPrompt('哎呀！答錯咗啦！\n再試一試！', 4, () => flashCoin(3));
+                    consecutiveWins = 0;
+                }
+            } catch (e) {
+                console.error('檢查猜測失敗:', e);
+            }
+        }
+
+        // 下一輪
+        function nextRound() {
+            try {
+                startGame();
+            } catch (e) {
+                console.error('下一輪啟動失敗:', e);
+            }
+        }
+
+        // 完成遊戲
+        function completeGame() {
+            try {
+                gameState = 'complete';
+                ballX = cups[ballPosition].x;
+                ballY = cups[ballPosition].y;
+                visible = true;
+                showPrompt('已經完成遊戲啦！啱晒，你真係好叻呀', 5, () => {
+                    level = 1;
+                    consecutiveWins = 0;
+                    startGame();
+                });
+                createConfetti();
+            } catch (e) {
+                console.error('完成遊戲失敗:', e);
+            }
+        }
+
+        // 彩紙效果
+        function createConfetti() {
+            try {
+                for (let i = 0; i < 100; i++) {
+                    const confetti = document.createElement('div');
+                    confetti.className = 'confetti';
+                    confetti.style.left = Math.random() * 100 + '%';
+                    confetti.style.backgroundColor = `hsl(${Math.random() * 360}, 100%, 50%)`;
+                    confetti.style.animationDuration = Math.random() * 3 + 2 + 's';
+                    confetti.style.animationDelay = Math.random() * 2 + 's';
+                    container.appendChild(confetti);
+                    setTimeout(() => confetti.remove(), 7000);
+                }
+            } catch (e) {
+                console.error('彩紙效果失敗:', e);
+            }
+        }
+
+        // 繪製循環
+        function draw() {
+            try {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (gameState !== 'start' && gameState !== 'moving_ball') {
+                    if (Math.abs(ballX - cups[ballPosition].x) > 1 || Math.abs(ballY - cups[ballPosition].y) > 1 || isNaN(ballX) || isNaN(ballY)) {
+                        console.warn('硬幣位置偏移，校正中:', {ballX, ballY, cupX: cups[ballPosition].x, cupY: cups[ballPosition].y});
+                        ballX = cups[ballPosition].x || canvas.width / 2;
+                        ballY = cups[ballPosition].y || canvas.height / 2;
+                    }
+                }
+                // 根據遊戲階段調整繪製順序
+                if (gameState === 'start' || gameState === 'feedback' || gameState === 'complete') {
+                    cups.forEach((cup) => drawCup(cup.x, cup.y)); // 先繪製杯子，硬幣在前
+                    drawCoin(ballX, ballY);
+                } else {
+                    drawCoin(ballX, ballY); // 先繪製硬幣，杯子在前
+                    cups.forEach((cup) => drawCup(cup.x, cup.y));
+                }
+                requestAnimationFrame(draw);
+            } catch (e) {
+                console.error('繪製失敗:', e);
+            }
+        }
+
+        // 啟動
+        try {
+            resizeCanvas();
+            initCups();
+            startGame();
+            draw();
+        } catch (e) {
+            console.error('遊戲初始化失敗:', e);
+        }
+    </script>
+</body>
+</html>
